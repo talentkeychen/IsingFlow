@@ -83,10 +83,10 @@ class Ising_2d(Ising):
       if self.periodic:
         padded = _periodic_padding(lattice, padding=1)
         conv = tf.nn.conv2d(padded, filter=_filter, strides=[1, 1, 1, 1], padding='VALID')
-        conv = tf.multiply(conv, lattice) / 2
+        conv = tf.multiply(conv, lattice)
       else:
         conv = tf.nn.conv2d(lattice, filter=_filter, strides=[1, 1, 1, 1], padding='SAME')
-        conv = tf.multiply(conv, lattice) / 2 # TODO : This is not exact.
+        conv = tf.multiply(conv, lattice) # TODO : This is not exact.
 
       conv = J * conv + B * lattice
       return 2*conv
