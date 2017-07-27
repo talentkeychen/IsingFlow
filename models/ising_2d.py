@@ -2,18 +2,14 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from models.model_base import Ising
+from tqdm import tqdm
+from six.moves import xrange
+
 import tensorflow as tf
 import numpy as np
-from models.model_base import Ising
 
 DTYPE=tf.float32
-
-def _convert2pm(zero_ones):
-  """acdaef"""
-  condition = tf.equal(zero_ones, 0)
-  return tf.where(condition,
-                  -tf.ones_like(zero_ones, dtype=DTYPE),
-                  tf.cast(zero_ones, dtype=DTYPE))
 
 def _periodic_padding(lattice, padding=1):
   '''
@@ -37,7 +33,9 @@ def _periodic_padding(lattice, padding=1):
 class Ising_2d(Ising):
   
   # let Hamiltonian as \beta H = - K \sum_{<i,j>} \sigma_i \sigma_j - L \sum_{i} sigma_i
-  def __init__(self, lattice_size, num_ensemble, num_iter, J, B, T, periodic=True, seed=531):
+  def __init__(self, lattice_size, num_ensemble, num_iter, time_avg=1000, J=1.0, B=0.0, T=1.0, periodic=True, seed=531):
+    assert lattice_size % 2 == 0
+    assert time_avg > 0
     self.lattice_size = lattice_size
     self.num_ensemble = num_ensemble
     self.num_iter = num_iter
@@ -49,6 +47,7 @@ class Ising_2d(Ising):
     self.init = tf.constant_initializer(2 * np.random.randint(0, 2, [num_ensemble, lattice_size, lattice_size, 1]) - 1,
                                         dtype=DTYPE)
     self.graph = tf.Graph()
+    self.build_graph(time_avg)
     
   def _Hamiltonian(self, lattice, J, B) :
     # let Hamiltonian as H = - J \sum_{<i,j>} \sigma_i \sigma_j - B \sum_{i} sigma_i
@@ -73,8 +72,8 @@ class Ising_2d(Ising):
                            [[[0]], [[1]], [[0]]]], dtype=DTYPE, name='kernel')
     
     a = np.zeros(shape=[self.lattice_size, self.lattice_size, 1], dtype=np.bool)
-    for i in range(self.lattice_size):
-      for j in range(self.lattice_size):
+    for i in xrange(self.lattice_size):
+      for j in xrange(self.lattice_size):
         a[i,j,0] = True if (i+j) % 2 == 0 else False
         
     _even_filter = tf.constant(a, dtype=tf.bool)
@@ -111,7 +110,7 @@ class Ising_2d(Ising):
     return tf.get_variable('lattice').assign(tf.where(condition, -lattice, lattice))
   
     
-  def build_graph(self):
+  def build_graph(self, time_avg):
     with self.graph.as_default() as g:
       _lattice_size = self.lattice_size
       _num_ensemble = self.num_ensemble
@@ -126,7 +125,7 @@ class Ising_2d(Ising):
                                 dtype=DTYPE,
                                 initializer=self.init)
       
-      moving_avg = tf.train.ExponentialMovingAverage(0.999)
+      moving_avg = tf.train.ExponentialMovingAverage(1.0 - 1/time_avg)
 
       M = tf.reduce_mean(lattice, axis=[1,2,3])
       M_square = tf.reduce_mean(tf.square(tf.reduce_sum(lattice, axis=[1,2,3])))
@@ -142,26 +141,35 @@ class Ising_2d(Ising):
       self.magnetization_square = moving_avg.average(M_square)
 
       self.specific_heat = tf.div(self.energy_square - tf.square(self.energy),
-                                  tf.square(T),
+                                  tf.square(T) * self.lattice_size**2,
                                   name='specific_heat')
 
-      self.susceptibility = tf.div(self.magnetization_square- tf.square(self.magnetization * self.lattice_size**2),
-                                   T,
+      self.susceptibility = tf.div(self.magnetization_square - tf.square(self.magnetization * self.lattice_size**2),
+                                   tf.multiply(T, self.lattice_size**2),
                                    name='susceptibility')
       
       tf.get_variable_scope().reuse_variables()
       with tf.control_dependencies([avg_op]):
         self.step = self._Metropolis(tf.get_variable('lattice'), J, B, T)
   
-  def run_session(self):
+  def run_session(self, temperatures=None):
     with tf.Session(graph=self.graph) as sess:
       tf.global_variables_initializer().run()
-      for i in range(self.num_iter):
-        _, E, E2, M, M2, C, X = sess.run([self.step, self.energy, self.energy_square,
-                                          self.magnetization, self.magnetization_square,
-                                          self.specific_heat, self.susceptibility])
+      
+      E, M, C, X = [], [], [], []
+      
+      if temperatures is None:
+        temperatures = [self.T]
+      for i in tqdm(temperatures, desc='Temperature'):
+        feed = {'Temperature:0' : i}
+        for _ in tqdm(xrange(self.num_iter), desc='Metropolis'):
+          _, _E, _E2, _M, _M2, _C, _X = sess.run([self.step, self.energy, self.energy_square,
+                                                  self.magnetization, self.magnetization_square,
+                                                  self.specific_heat, self.susceptibility],
+                                                 feed_dict=feed)
+        E.append(_E / self.lattice_size**2)
+        M.append(_M)
+        C.append(_C)
+        X.append(_X)
         
-        # if i % 1000 == 0:
-        #   print('Energy : %.2f \t Magnetization : %.2f \t C : %.2f \t X : %.2f'
-        #         % (E / self.lattice_size**2, abs(M), C, X))
       return E, M, C, X
