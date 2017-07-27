@@ -46,13 +46,12 @@ class Ising_2d(Ising):
     self.T = T # Temperature scaled with boltzmann factor T <- k_{B} T, therefore \beta = 1 / T
     self.periodic = True
     self.seed = seed
-    self.init = tf.constant_initializer(np.random.randint(0, 2, [num_ensemble, lattice_size, lattice_size, 1]),
+    self.init = tf.constant_initializer(2 * np.random.randint(0, 2, [num_ensemble, lattice_size, lattice_size, 1]) - 1,
                                         dtype=DTYPE)
     self.graph = tf.Graph()
     
   def _Hamiltonian(self, lattice, J, B) :
     # let Hamiltonian as H = - J \sum_{<i,j>} \sigma_i \sigma_j - B \sum_{i} sigma_i
-    moving_avg = tf.train.ExponentialMovingAverage(0.999)
     _filter = tf.constant([[[[0]], [[1]], [[0]]],
                           [[[1]], [[0]], [[1]]],
                           [[[0]], [[1]], [[0]]]], dtype=DTYPE, name='kernel')
@@ -89,7 +88,7 @@ class Ising_2d(Ising):
         conv = tf.nn.conv2d(lattice, filter=_filter, strides=[1, 1, 1, 1], padding='SAME')
         conv = tf.multiply(conv, lattice) / 2 # TODO : This is not exact.
 
-      conv = - J * conv - B * lattice
+      conv = J * conv + B * lattice
       return 2*conv
     
     delta_even = delta_energy(lattice)
@@ -127,13 +126,10 @@ class Ising_2d(Ising):
                                 dtype=DTYPE,
                                 initializer=self.init)
       
-      lattice = lattice.assign(_convert2pm(lattice))
-      
       moving_avg = tf.train.ExponentialMovingAverage(0.999)
 
       M = tf.reduce_mean(lattice, axis=[1,2,3])
-      M_square = tf.reduce_mean(tf.square(M))
-      M = tf.reduce_mean(M)
+      M_square = tf.reduce_mean(tf.square(tf.reduce_sum(lattice, axis=[1,2,3])))
       
       H = self._Hamiltonian(lattice, J, B)
       H_square = tf.reduce_mean(tf.square(H))
@@ -142,16 +138,16 @@ class Ising_2d(Ising):
       avg_op = moving_avg.apply([H, H_square, M, M_square])
       self.energy = moving_avg.average(H)
       self.energy_square = moving_avg.average(H_square)
-      self.magnetization = moving_avg.average(M)
+      self.magnetization = tf.reduce_mean(tf.abs(moving_avg.average(M)))
       self.magnetization_square = moving_avg.average(M_square)
 
       self.specific_heat = tf.div(self.energy_square - tf.square(self.energy),
                                   tf.square(T),
                                   name='specific_heat')
 
-      self.susceptibility = tf.div(self.magnetization_square- tf.square(self.magnetization),
-                                   tf.square(T),
-                                   name='specific_heat')
+      self.susceptibility = tf.div(self.magnetization_square- tf.square(self.magnetization * self.lattice_size**2),
+                                   T,
+                                   name='susceptibility')
       
       tf.get_variable_scope().reuse_variables()
       with tf.control_dependencies([avg_op]):
@@ -165,6 +161,7 @@ class Ising_2d(Ising):
                                           self.magnetization, self.magnetization_square,
                                           self.specific_heat, self.susceptibility])
         
-        if i % 1000 == 0:
-          print('Energy : %.2f, Magnetization : %.2f, C : %.2f, X : %.2f'
-                % (E, M, C, X))
+        # if i % 1000 == 0:
+        #   print('Energy : %.2f \t Magnetization : %.2f \t C : %.2f \t X : %.2f'
+        #         % (E / self.lattice_size**2, abs(M), C, X))
+      return E, M, C, X
