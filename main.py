@@ -46,7 +46,7 @@ tf.flags.DEFINE_float('t_end', 4.0,
 
 
 def main(_):
-  lattices = [FLAGS.start_lattice_size * FLAGS.lattice_factor ** (i+1) for i in range(FLAGS.num_system)]
+  lattices = [FLAGS.start_lattice_size * FLAGS.lattice_factor ** (i) for i in range(FLAGS.num_system)]
   temperatures = np.linspace(FLAGS.t_start, FLAGS.t_end, FLAGS.num_temperature)
   
   for l in tqdm(lattices, desc='Lattice'):
